@@ -1,0 +1,163 @@
+# Para saber mais sobre o Trivy acesse: https://aquasecurity.github.io/trivy/v0.53/docs/
+
+trigger:
+- main
+
+variables:
+  vmImageName: 'ubuntu-latest'
+  projectDirectory: './src/WorkerContagem/'
+  projectFile: 'WorkerContagem.csproj'
+
+stages:
+- stage: CodeScanning
+  displayName: Code Scanning stage
+  jobs:
+  - job: CodeScanning
+    displayName: CodeScanning
+    pool:
+      vmImage: $(vmImageName)
+    steps:
+    - script: |
+        cd $(projectDirectory)
+        cat $(projectFile)
+      displayName: Exibir o conteudo do arquivo .csproj antes dos ajustes com xml2
+    - script: |
+        sudo apt-get install xml2
+      displayName: Instalar o xml2
+    - script: |
+        cd $(projectDirectory)
+        xml2 < $(projectFile) | grep -v "/RestorePackagesWithLockFile" | xml2 > projectFile.tmp
+        echo "/Project/PropertyGroup/RestorePackagesWithLockFile=true" >> projectFile.tmp
+        xml2 < projectFile.tmp > $(projectFile)
+        rm projectFile.tmp
+      displayName: Configurar o arquivo .csproj
+    - script: |
+        cd $(projectDirectory)
+        cat $(projectFile)
+      displayName: Exibir o conteudo do arquivo .csproj apos ajustes com xml2
+    - script: |
+        sudo apt-get install wget apt-transport-https gnupg
+        wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | gpg --dearmor | sudo tee /usr/share/keyrings/trivy.gpg > /dev/null
+        echo "deb [signed-by=/usr/share/keyrings/trivy.gpg] https://aquasecurity.github.io/trivy-repo/deb generic main" | sudo tee -a /etc/apt/sources.list.d/trivy.list
+        sudo apt-get update
+        sudo apt-get install trivy      
+      displayName: Instalar o Trivy
+    - script: |
+        trivy
+      displayName: Testar o Trivy
+    - script: |
+        cd $(projectDirectory)
+        dotnet restore
+        trivy fs -f table --dependency-tree --scanners vuln,misconfig,secret .
+      displayName: Executar o Trivy analisando o codigo (table + dependency-tree)
+    - script:
+        mkdir results
+      displayName: Criacao do diretorio /results que contera os resultados dos testes
+    - script: |
+        trivy fs --scanners vuln,secret,misconfig --format template --template "@/usr/local/share/trivy/templates/html.tpl" --output ./results/report-code.html $(projectDirectory)
+      displayName: Executar o Trivy analisando o codigo (arquivo HTML)
+    - script: |
+        cd ./results
+        ls
+      displayName: Exibir arquivos com os resultados das analises
+    - task: PublishHtmlReport@1
+      inputs:
+        reportDir: './results/report-code.html'
+      displayName: Publicar resultado dos testes no formato HTML
+- stage: ImageScanning
+  dependsOn: CodeScanning
+  displayName: Image Scanning stage
+  condition: always()
+  jobs:
+  - job: ImageScanning
+    displayName: ImageScanning
+    pool:
+      vmImage: $(vmImageName)
+    steps:
+    - script: |
+        cd $(projectDirectory)
+        docker build . -t image-to-scan-test:$(Build.BuildNumber) --no-cache
+      displayName: Build da imagem para analise
+    - script: |
+        sudo apt-get install wget apt-transport-https gnupg
+        wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | gpg --dearmor | sudo tee /usr/share/keyrings/trivy.gpg > /dev/null
+        echo "deb [signed-by=/usr/share/keyrings/trivy.gpg] https://aquasecurity.github.io/trivy-repo/deb generic main" | sudo tee -a /etc/apt/sources.list.d/trivy.list
+        sudo apt-get update
+        sudo apt-get install trivy      
+      displayName: Instalar o Trivy
+    - script: |
+        trivy
+      displayName: Testar o Trivy
+    - script:
+        mkdir results
+      displayName: Criacao do diretorio /results que contera os resultados dos testes
+    - script: |
+        cd /usr/local/share/trivy/templates
+        pwd
+        echo '*** Templates encontrados:'
+        ls
+      displayName: Exibir templates pre-definidos do Trivy
+    - script: |
+        trivy image --scanners vuln,secret,misconfig --format template --template "@/usr/local/share/trivy/templates/html.tpl" --output ./results/report.html image-to-scan-test:$(Build.BuildNumber)
+      displayName: Executar o Trivy analisando imagem (arquivo HTML)
+    - script: |
+        trivy image --scanners vuln,secret,misconfig --format table --dependency-tree image-to-scan-test:$(Build.BuildNumber) | tee ./results/report.md
+      displayName: Executar o Trivy analisando imagem (table + dependency-tree)
+    - script: |
+        cd ./results
+        report_file="report.md"
+        header="# Resultado da análise via Trivy\nVulnerabilidades encontradas:\n\n\`\`\`txt\n"
+
+        # Adicionar o conteúdo ao início do arquivo
+        temp_file=$(mktemp)
+        echo -e "$header" > "$temp_file"
+        cat "$report_file" >> "$temp_file"
+        echo -e "\n\`\`\`" >> "$temp_file"
+        mv "$temp_file" "$report_file"
+      displayName: Acertar arquivo report.md
+    - script: |
+        trivy image --scanners vuln,secret,misconfig --format sarif --output ./results/report.sarif image-to-scan-test:$(Build.BuildNumber)
+      displayName: Executar o Trivy analisando imagem (arquivo SARIF)
+    - script: |
+        trivy image --scanners vuln,secret,misconfig --format template --template "@/usr/local/share/trivy/templates/junit.tpl" --output ./results/junit-report.xml image-to-scan-test:$(Build.BuildNumber)
+      displayName: Executar o Trivy analisando imagem (arquivo JUnit)
+    - script: |
+        cd ./results
+        ls
+      displayName: Exibir arquivos com os resultados das analises
+    - task: PublishBuildArtifacts@1
+      inputs:
+        PathtoPublish: './results/report.sarif'
+        ArtifactName: 'CodeAnalysisLogs'
+        publishLocation: 'Container'
+      displayName: Publicacao de relatorio SARIF
+    - task: PublishHtmlReport@1
+      inputs:
+        reportDir: './results/report.html'
+      displayName: Publicar resultado dos testes no formato HTML
+    - task: PublishTestResults@2
+      inputs:
+        testResultsFormat: 'JUnit'
+        testResultsFiles: './results/junit-report.xml'
+      displayName: Publicar resultado dos testes no formato do JUnit XML
+    - task: PublishMarkdownReports@1
+      inputs:
+        contentPath: '$(Build.SourcesDirectory)/results/'
+        indexFile: 'report.md'
+      displayName: Publicar resultados (table + dependency-tree) como um arquivo Markdown
+    - script:
+        trivy image --scanners vuln,secret,misconfig --exit-code 1 --severity HIGH,CRITICAL image-to-scan-test:$(Build.BuildNumber)
+      displayName: Gerar erro para vulnerabilidades HIGH e CRITICAL
+- stage: BuildSimulation
+  dependsOn: ImageScanning
+  displayName: Build Simulation stage
+  jobs:
+  - job: BuildSimulation
+    displayName: BuildSimulation
+    pool:
+      vmImage: $(vmImageName)
+    steps:
+    - script: |
+        cd $(projectDirectory)
+        docker build . -t test-image:$(Build.BuildNumber) --no-cache
+      displayName: Build da imagem para analise
