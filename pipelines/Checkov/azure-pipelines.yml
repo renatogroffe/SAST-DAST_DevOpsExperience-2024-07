@@ -1,0 +1,41 @@
+trigger:
+- main
+
+variables:
+  vmImageName: 'ubuntu-latest'
+  yamlDirectory: './src'
+
+stages:
+- stage: SecretScanning
+  displayName: Secret Scanning stage
+  jobs:
+  - job: SecretScanning
+    displayName: SecretScanning
+    pool:
+      vmImage: $(vmImageName)
+    steps:
+    - script: |
+        pip install checkov
+      displayName: Instalar o Checkov via pip
+    - script: |
+        checkov
+        checkov --help
+      displayName: Testar a instalacao do Checkov
+    - script: |
+        mkdir results
+      displayName: Criar diretorio /results para armazenar os resultados gerados com o Checkov
+    - script: |
+        checkov -d $(yamlDirectory) -o cli -o sarif --output-file-path ./results/results-k8s-yaml-invalid.sarif
+      displayName: Executar analise com o Checkov
+    - script: |
+        cd results
+        ls
+      displayName: Exibir arquivos gerados em /results
+      condition: always()
+    - task: PublishBuildArtifacts@1
+      inputs:
+        PathtoPublish: './results/results-k8s-yaml-invalid.sarif'
+        ArtifactName: 'CodeAnalysisLogs'
+        publishLocation: 'Container'
+      displayName: Publicacao de relatorio SARIF
+      condition: failed()
