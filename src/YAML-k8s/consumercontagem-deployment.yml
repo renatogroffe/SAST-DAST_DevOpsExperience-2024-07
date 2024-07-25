@@ -1,0 +1,27 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: consumercontagem
+spec:
+  selector:
+    matchLabels:
+      app: consumercontagem
+  replicas: 1
+  template:
+    metadata:
+      labels:
+        app: consumercontagem
+    spec:
+      containers:
+      - name: consumercontagem
+        image: renatogroffe/dotnet8-rabbitmq-consumer-contagem:1
+        env:
+        - name: QueueName
+          value: queue-contagem
+        - name: Interval
+          value: "100"
+        - name: ConnectionStrings__RabbitMQ
+          valueFrom:
+            secretKeyRef:
+              name: consumercontagemsecret
+              key: ConnectionRabbitMQ
