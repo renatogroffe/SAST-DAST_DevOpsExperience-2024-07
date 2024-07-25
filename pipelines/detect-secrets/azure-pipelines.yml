@@ -1,0 +1,117 @@
+# Para saber mais sobre o detect-secrets acesse: https://github.com/Yelp/detect-secrets
+
+trigger:
+- main
+
+variables:
+  vmImageName: 'ubuntu-latest'
+  urlPluginConnectionStringsDB: 'https://raw.githubusercontent.com/renatogroffe/SAST-DAST_DevOpsExperience-2024-07/main/src/Plugins_detect-secrets/custom_sqlserv_postgres.py'
+
+stages:
+- stage: SecretScanning
+  displayName: Secret Scanning stage
+  jobs:
+  - job: SecretScanning
+    displayName: SecretScanning
+    pool:
+      vmImage: $(vmImageName)
+    steps:
+    - script: |
+        pip install detect-secrets
+      displayName: Instalar o detect-secrets via pip
+    - script: |
+        detect-secrets scan --help
+      displayName: Testar a instalacao do detect-secrets
+    - script: |
+        curl -o custom-secrets-db.py $(urlPluginConnectionStringsDB)
+        pwd
+        ls
+        cat custom-secrets-db.py
+      displayName: Baixar o plugin customizado do detect-secrets para analisar Connection Strings
+    - script: |
+        detect-secrets scan --all-files --plugin custom-secrets-db.py --force-use-all-plugins --exclude-files FETCH_HEAD --exclude-files custom-secrets-db\.py  | tee  $(Pipeline.Workspace)/results-detect-secrets.json
+      displayName: Executar scan com detect-secrets, incluindo custom plugin (Connection Strings)
+    - script: |
+        echo 'Arquivos no diretorio'
+        echo '$(Pipeline.Workspace)'
+        echo ''
+        cd $(Pipeline.Workspace)
+        ls
+      displayName: Confirmar que o arquivo results-detect-secrets.json foi gerado com sucesso
+    - bash: |
+        dsjson=$(cat $(Pipeline.Workspace)/results-detect-secrets.json)
+        echo "${dsjson}"
+
+        count=$(echo "${dsjson}" | jq -c -r '.results | length')
+
+        if [ $count -gt 0 ]; then
+          msg="Secrets foram detectados no codigo. ${count} arquivo(s) afetado(s)."
+          echo "##vso[task.logissue type=error]${msg}"
+          echo "##vso[task.complete result=Failed;]${msg}."
+        else
+          echo "##vso[task.complete result=Succeeded;]Nao foram detectados secrets."
+        fi
+      displayName: Analisando resultados no arquivo results-detect-secrets.json
+    - pwsh: |
+        cd $(Pipeline.Workspace)
+
+        # Ler o arquivo JSON
+        $results = Get-Content -Raw -Path "results-detect-secrets.json" | ConvertFrom-Json
+
+        # Estrutura básica do SARIF
+        $sarifReport = @{
+            version = "2.1.0"
+            '$schema' = "https://json.schemastore.org/sarif-2.1.0.json"
+            runs = @(
+                @{
+                    tool = @{
+                        driver = @{
+                            name = "detect-secrets"
+                            version = "1.0.3"  # Coloque a versão correta
+                            informationUri = "https://github.com/Yelp/detect-secrets"
+                            rules = @()
+                        }
+                    }
+                    results = @()
+                }
+            )
+        }
+        
+        # Populando o SARIF com os resultados
+        foreach ($filepath in $results.results.PSObject.Properties.Name) {
+            foreach ($secret in $results.results.$filepath) {
+                $line_number = $secret.line_number
+                $hashed_secret = $secret.hashed_secret
+                $sarifReport.runs[0].results += @{
+                    ruleId = $secret.type
+                    level = "error"
+                    message = @{
+                        text = "Secret encontrado em $filepath --- Linha $line_number --- Hash = $hashed_secret"
+                    }
+                    locations = @(
+                        @{
+                            physicalLocation = @{
+                                artifactLocation = @{
+                                    uri = $filepath
+                                }
+                                region = @{
+                                    startLine = $secret.line_number
+                                }
+                            }
+                        }
+                    )
+                }
+            }
+        }
+
+        # Converter o SARIF para JSON e salvar em um arquivo
+        $sarifReport | ConvertTo-Json -Depth 10 | Set-Content -Path "results-detect-secrets.sarif"
+      displayName: Converter arquivo results-detect-secrets.json para formato SARIF
+      condition: failed()
+    - task: PublishBuildArtifacts@1
+      inputs:
+        PathtoPublish: '$(Pipeline.Workspace)/results-detect-secrets.sarif'
+        ArtifactName: 'CodeAnalysisLogs'
+        publishLocation: 'Container'
+      displayName: Publicacao de relatorio SARIF
+      condition: failed()
