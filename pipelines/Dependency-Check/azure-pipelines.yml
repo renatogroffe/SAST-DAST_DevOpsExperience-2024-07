@@ -1,0 +1,47 @@
+trigger:
+- main
+
+variables:
+  projectName: 'dotnet6-rabbitmq-workercontagem'
+  projectDirectory: './src/WorkerContagem'
+
+  # Agent VM image name
+  vmImageName: 'ubuntu-latest'
+
+stages:
+- stage: OWASPDependencyCheck
+  displayName: OWASP Dependency Check stage
+  jobs:
+  - job: OWASPDependencyCheck
+    displayName: OWASPDependencyCheck
+    variables:
+      - group: code-analysis
+    pool:
+      vmImage: $(vmImageName)
+    steps:
+    - task: dependency-check-build-task@6
+      inputs:
+        projectName: '$(projectName)'
+        scanPath: '$(projectDirectory)'
+        format: 'HTML'
+        uploadReports: true
+        failOnCVSS: '2'
+        enableVerbose: true
+        nvdApiKey: '$(NVDApiKey)'
+      displayName: Executar OWASP Dependency Check
+    - task: PublishHtmlReport@1
+      condition: always()
+      inputs:
+        reportDir: '../TestResults/dependency-check/dependency-check-report.html'
+      displayName: Publicar relatorio com os resultados da analise
+- stage: Build
+  dependsOn: OWASPDependencyCheck
+  displayName: Build stage
+  jobs:
+  - job: Build
+    displayName: Build
+    pool:
+      vmImage: $(vmImageName)
+    steps:
+    - script: echo 'Alguma acao de Build...'
+      displayName: Testando um provavel stage de Build
