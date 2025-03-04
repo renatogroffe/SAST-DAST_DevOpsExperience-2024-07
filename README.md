@@ -19,6 +19,16 @@ Deixo aqui meus agradecimentos ao **Daniel Ginês** e à **Aline Martins** por t
 
 ---
 
-![alt](img/audiencia.png)
+![Audiência](img/audiencia.png)
+
+![Renato palestrando](img/s-01.png)
+
+![Renato palestrando](img/s-04.png)
+
+![Renato palestrando](img/s-05.png)
+
+![Banner](img/banner.png)
+
+![Instagram](img/instagram.png)
 
 Outros prints podem ser encontrados neste [**diretório**](/img/).
